@@ -6,7 +6,6 @@ import pyarrow.parquet as pq
 from fastavro import reader
 from confluent_kafka.admin import AdminClient, NewTopic
 from confluent_kafka import SerializingProducer
-# import confluent_kafka
 from confluent_kafka.serialization import StringSerializer  # Serializer for message keys
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
@@ -14,9 +13,7 @@ import io
 from dotenv import load_dotenv
 import os
 from datetime import datetime
-import concurrent.futures
 
-import random
 import schemas
 
 # Load environment variables from .env file
@@ -30,14 +27,14 @@ aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
 aws_region = os.getenv('AWS_REGION')
 s3_bucket = os.getenv('S3_BUCKET')
 s3_prefix = os.getenv('S3_PREFIX')
-kafka_topic = os.getenv('TOPIC') + str(exp_num)
+kafka_topic = os.getenv('TOPIC')
 schema_registry_url = os.getenv('SCHEMA_REGISTRY_URL')
 schema_registry_basic_auth_user_info = os.getenv('AUTH_USER_INFO')
 bootstrap_servers = os.getenv('BOOTSTRAP_SERVERS')
 
 
-
 def get_kafka_config():
+    """Get Kafka configuration from environment variables."""
     return {
         'bootstrap.servers': os.environ['BOOTSTRAP_SERVERS'],
         'security.protocol': os.environ['SECURITY_PROTOCOL'],
@@ -48,7 +45,7 @@ def get_kafka_config():
 
 
 def check_and_create_topic(topic_name):
-    # admin_client_conf = {'bootstrap.servers': bootstrap_servers}
+    """Check if the Kafka topic exists, create it if not."""
     admin_client = AdminClient(get_kafka_config())
 
     try:
@@ -58,10 +55,11 @@ def check_and_create_topic(topic_name):
             future.result()
             logger.info(f"Created topic {topic}.")
     except Exception as e:
-        logger.warning(f'An error occurred while createing topic: {e}')
-    
+        logger.warning(f'An error occurred while creating topic: {e}')
+
 
 def get_s3_parquet_files(bucket, prefix, aws_access_key, aws_secret_key, aws_region):
+    """Get a list of Parquet files from an S3 bucket with a specific prefix."""
     s3 = boto3.client('s3', aws_access_key_id=aws_access_key, aws_secret_access_key=aws_secret_key, region_name=aws_region)
 
     response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
@@ -69,7 +67,9 @@ def get_s3_parquet_files(bucket, prefix, aws_access_key, aws_secret_key, aws_reg
 
     return files
 
+
 def read_parquet_file_from_s3(bucket, key, aws_access_key, aws_secret_key, aws_region):
+    """Read Parquet data from an S3 bucket."""
     s3 = boto3.client('s3', aws_access_key_id=aws_access_key, aws_secret_access_key=aws_secret_key, region_name=aws_region)
 
     response = s3.get_object(Bucket=bucket, Key=key)
@@ -77,21 +77,25 @@ def read_parquet_file_from_s3(bucket, key, aws_access_key, aws_secret_key, aws_r
 
     return parquet_data
 
+
 def delivery_report(err, msg):
+    """Callback function for message delivery."""
     if err is not None:
         logger.error(f'Message delivery failed: {err}')
     else:
         logger.info(f'Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}')
 
+
 def produce_parquet_data_to_kafka(parquet_data, producer, topic):
+    """Produce Parquet data to Kafka topic."""
     table = pq.read_table(io.BytesIO(parquet_data))
     records = table.to_pandas().to_dict(orient='records')
-    
+
     for i, record in enumerate(records):
-        # convert timestamps to strings
+        # Convert timestamps to strings
         record["tpep_pickup_datetime"] = record["tpep_pickup_datetime"].strftime('%Y-%m-%d')
         record["tpep_dropoff_datetime"] = record["tpep_dropoff_datetime"].strftime('%Y-%m-%d')
-        
+
         if record == {}:
             break
 
@@ -99,20 +103,19 @@ def produce_parquet_data_to_kafka(parquet_data, producer, topic):
         producer.produce(
             topic=topic,
             value=record
-            # callback=delivery_report
         )
         if i % 10_000 == 0:
             producer.flush()
 
 
 def make_producer(schema_str: str) -> SerializingProducer:
+    """Create a Kafka producer with Avro serialization."""
     schema_registry_conf = {
         'url': schema_registry_url,
         'basic.auth.user.info': schema_registry_basic_auth_user_info
     }
     schema_reg_client = SchemaRegistryClient(schema_registry_conf)
 
-    # print(schema_str)
     avro_serializer = AvroSerializer(
         schema_registry_client=schema_reg_client,
         schema_str=schema_str,
@@ -128,10 +131,11 @@ def make_producer(schema_str: str) -> SerializingProducer:
 
     return SerializingProducer(producer_conf)
 
+
 def main():
+    """Main function to process Parquet files and produce messages to Kafka."""
     # Check and create Kafka topic if it doesn't exist
     check_and_create_topic(kafka_topic)
-    # check_and_create_topic()
 
     s3_files = get_s3_parquet_files(s3_bucket, s3_prefix, aws_access_key_id, aws_secret_access_key, aws_region)
 
@@ -147,6 +151,7 @@ def main():
         produce_parquet_data_to_kafka(parquet_data, producer, kafka_topic)
 
     producer.flush()
+
 
 if __name__ == "__main__":
     main()
