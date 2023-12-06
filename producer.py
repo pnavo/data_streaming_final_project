@@ -92,7 +92,7 @@ def produce_parquet_data_to_kafka(parquet_data, producer, topic):
         record["tpep_pickup_datetime"] = record["tpep_pickup_datetime"].strftime('%Y-%m-%d')
         record["tpep_dropoff_datetime"] = record["tpep_dropoff_datetime"].strftime('%Y-%m-%d')
         
-        if record.shape[0] == i+1:
+        if record == {}:
             break
 
         # Asynchronously produce the messages
